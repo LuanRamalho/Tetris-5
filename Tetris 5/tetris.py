@@ -67,13 +67,14 @@ class Tetris:
         self.speed = 500
         self.game_over = False
 
-    def check_collision(self, dx=0, dy=0, rotated_shape=None):
+    def check_collision(self, dx=0, dy=0, rotated_shape=None, ghost_y = None):
         shape = rotated_shape or self.current_piece.shape
+        y_piece = ghost_y if ghost_y is not None else self.current_piece.y
         for y, row in enumerate(shape):
             for x, cell in enumerate(row):
                 if cell:
                     new_x = self.current_piece.x + x + dx
-                    new_y = self.current_piece.y + y + dy
+                    new_y = y_piece + y + dy
                     if new_x < 0 or new_x >= COLUMNS or new_y >= ROWS:
                         return True
                     if new_y >= 0 and self.grid[new_y][new_x] != BLACK:
@@ -165,6 +166,20 @@ class Tetris:
                     pygame.draw.rect(tela, self.next_piece.color, (SCREEN_WIDTH - 120 + x * GRID_SIZE, 30 + y * GRID_SIZE, GRID_SIZE, GRID_SIZE))
                     pygame.draw.rect(tela, BLACK, (SCREEN_WIDTH - 120 + x * GRID_SIZE, 30 + y * GRID_SIZE, GRID_SIZE, GRID_SIZE), 1)  # Adiciona borda preta
 
+    def get_ghost_piece_position(self):
+        ghost_y = self.current_piece.y
+        while not self.check_collision(dy=1, rotated_shape=self.current_piece.shape, ghost_y=ghost_y):
+            ghost_y += 1
+        return ghost_y
+
+    def draw_ghost_piece(self):
+        ghost_y = self.get_ghost_piece_position()
+        ghost_color = tuple(c // 2 for c in self.current_piece.color)  # Cor mais clara
+        for y, row in enumerate(self.current_piece.shape):
+            for x, cell in enumerate(row):
+                if cell:
+                    pygame.draw.rect(tela, ghost_color, ((self.current_piece.x + x) * GRID_SIZE, (ghost_y + y) * GRID_SIZE, GRID_SIZE, GRID_SIZE), 1) # Desenha apenas a borda
+
     def update_level(self):
         self.level = 1 + self.lines_cleared // 10
         self.speed = max(100, 500 - (self.level - 1) * 40)
@@ -198,6 +213,7 @@ def main():
 
         tetris.update_level()
         tetris.draw_grid()
+        tetris.draw_ghost_piece()
         tetris.draw_piece(tetris.current_piece)
         tetris.draw_next_piece()
 
