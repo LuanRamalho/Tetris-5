@@ -1,248 +1,533 @@
-import pygame
-import random
 import json
+import os
+import random
+import sys
+from dataclasses import dataclass
 
-# Configurações do jogo
-SCREEN_WIDTH, SCREEN_HEIGHT = 300, 600
-GRID_SIZE = 30
-COLUMNS, ROWS = SCREEN_WIDTH // GRID_SIZE, SCREEN_HEIGHT // GRID_SIZE
+import pygame
 
-# Cores
+# ----------------------------
+# Configuração geral
+# ----------------------------
+WIDTH, HEIGHT = 1080, 720
+PLAY_WIDTH, PLAY_HEIGHT = 360, 600
+BLOCK = 30
+COLS, ROWS = PLAY_WIDTH // BLOCK, PLAY_HEIGHT // BLOCK
+TOP_LEFT_X = 60
+TOP_LEFT_Y = 60
+SIDEBAR_X = TOP_LEFT_X + PLAY_WIDTH + 40
+FPS = 60
+
+HIGH_SCORE_FILE = "highscore.json"
+
+BG = (12, 14, 24)
+PANEL = (22, 28, 44)
+PANEL_2 = (18, 22, 34)
+GRID = (36, 42, 60)
+WHITE = (245, 245, 245)
+CYAN = (0, 255, 255)
+GHOST = (255, 255, 255, 70)
 BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
+SHADOW = (0, 0, 0, 80)
 
-# Peças clássicas do Tetris (formato e rotação)
-SHAPES = [
-    [[1, 1, 1, 1]],  # I
-    [[1, 1, 0], [0, 1, 1]],  # Z
-    [[0, 1, 1], [1, 1, 0]],  # S
-    [[1, 1], [1, 1]],  # O
-    [[1, 0, 0], [1, 1, 1]],  # L
-    [[0, 0, 1], [1, 1, 1]],  # J
-    [[0, 1, 0], [1, 1, 1]],  # T
+# Tabela de peças: formato 5x5 com offsets de blocos
+S = [[".....",
+      ".....",
+      "..00.",
+      ".00..",
+      "....."],
+     [".....",
+      "..0..",
+      "..00.",
+      "...0.",
+      "....."]]
+
+Z = [[".....",
+      ".....",
+      ".00..",
+      "..00.",
+      "....."],
+     [".....",
+      "..0..",
+      ".00..",
+      ".0...",
+      "....."]]
+
+I = [["..0..",
+      "..0..",
+      "..0..",
+      "..0..",
+      "....."],
+     [".....",
+      "0000.",
+      ".....",
+      ".....",
+      "....."]]
+
+O = [[".....",
+      ".....",
+      ".00..",
+      ".00..",
+      "....."]]
+
+J = [[".....",
+      ".0...",
+      ".000.",
+      ".....",
+      "....."],
+     [".....",
+      "..00.",
+      "..0..",
+      "..0..",
+      "....."],
+     [".....",
+      ".....",
+      ".000.",
+      "...0.",
+      "....."],
+     [".....",
+      "..0..",
+      "..0..",
+      ".00..",
+      "....."]]
+
+L = [[".....",
+      "...0.",
+      ".000.",
+      ".....",
+      "....."],
+     [".....",
+      "..0..",
+      "..0..",
+      "..00.",
+      "....."],
+     [".....",
+      ".....",
+      ".000.",
+      ".0...",
+      "....."],
+     [".....",
+      ".00..",
+      "..0..",
+      "..0..",
+      "....."]]
+
+T = [[".....",
+      "..0..",
+      ".000.",
+      ".....",
+      "....."],
+     [".....",
+      "..0..",
+      "..00.",
+      "..0..",
+      "....."],
+     [".....",
+      ".....",
+      ".000.",
+      "..0..",
+      "....."],
+     [".....",
+      "..0..",
+      ".00..",
+      "..0..",
+      "....."]]
+
+PIECES = [S, Z, I, O, J, L, T]
+PIECE_COLORS = [
+    (0, 240, 120),
+    (255, 70, 70),
+    (70, 220, 255),
+    (255, 215, 70),
+    (90, 130, 255),
+    (255, 160, 60),
+    (190, 90, 255),
 ]
 
-# Inicializa o Pygame
-pygame.init()
 
-# Configuração da tela
-tela = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("Tetris")
-clock = pygame.time.Clock()
+@dataclass
+class Piece:
+    x: int
+    y: int
+    shape: list
+    color: tuple
+    rotation: int = 0
 
-# Inicializa HighScore
-HIGHSCORE_FILE = "highscore.json"
+    @property
+    def variant_count(self):
+        return len(self.shape)
+
+
 def load_highscore():
+    if not os.path.exists(HIGH_SCORE_FILE):
+        return 0
     try:
-        with open(HIGHSCORE_FILE, "r") as file:
-            return json.load(file).get("highscore", 0)
-    except FileNotFoundError:
+        with open(HIGH_SCORE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return int(data.get("highscore", 0))
+    except Exception:
         return 0
 
+
 def save_highscore(score):
-    with open(HIGHSCORE_FILE, "w") as file:
-        json.dump({"highscore": score}, file)
+    try:
+        with open(HIGH_SCORE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"highscore": int(score)}, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
 
-highscore = load_highscore()
 
-# Classes
-class Piece:
-    def __init__(self):
-        self.shape = random.choice(SHAPES)
-        self.color = [random.randint(50, 255) for _ in range(3)]
-        self.x = COLUMNS // 2 - len(self.shape[0]) // 2
-        self.y = 0
+def create_grid(locked_positions=None):
+    grid = [[(15, 18, 30) for _ in range(COLS)] for _ in range(ROWS)]
+    if locked_positions:
+        for (x, y), color in locked_positions.items():
+            if 0 <= x < COLS and 0 <= y < ROWS:
+                grid[y][x] = color
+    return grid
 
-    def rotate(self):
-        self.shape = [list(row) for row in zip(*self.shape[::-1])]
 
-class Tetris:
-    def __init__(self):
-        self.grid = [[BLACK for _ in range(COLUMNS)] for _ in range(ROWS)]
-        self.current_piece = Piece()
-        self.next_piece = Piece()
-        self.score = 0
-        self.lines_cleared = 0
-        self.level = 1
-        self.speed = 500
-        self.game_over = False
+def convert_shape_format(piece):
+    positions = []
+    shape = piece.shape[piece.rotation % len(piece.shape)]
 
-    def check_collision(self, dx=0, dy=0, rotated_shape=None, ghost_y = None):
-        shape = rotated_shape or self.current_piece.shape
-        y_piece = ghost_y if ghost_y is not None else self.current_piece.y
-        for y, row in enumerate(shape):
-            for x, cell in enumerate(row):
-                if cell:
-                    new_x = self.current_piece.x + x + dx
-                    new_y = y_piece + y + dy
-                    if new_x < 0 or new_x >= COLUMNS or new_y >= ROWS:
-                        return True
-                    if new_y >= 0 and self.grid[new_y][new_x] != BLACK:
-                        return True
-        return False
+    for i, line in enumerate(shape):
+        for j, char in enumerate(line):
+            if char == "0":
+                positions.append((piece.x + j - 2, piece.y + i - 4))
+    return positions
 
-    def freeze_piece(self):
-        for y, row in enumerate(self.current_piece.shape):
-            for x, cell in enumerate(row):
-                if cell:
-                    grid_x = self.current_piece.x + x
-                    grid_y = self.current_piece.y + y
-                    self.grid[grid_y][grid_x] = {
-                        "color": self.current_piece.color,
-                        "border": True,  # Marca como com borda
-                    }
 
-    def clear_lines(self):
-        cleared = 0
-        for y in range(ROWS):
-            if all(self.grid[y][x] != BLACK for x in range(COLUMNS)):
-                del self.grid[y]
-                self.grid.insert(0, [BLACK for _ in range(COLUMNS)])
-                cleared += 1
-        self.lines_cleared += cleared
-        self.score += cleared * 10
-        return cleared
+def valid_space(piece, grid):
+    accepted_positions = [[(j, i) for j in range(COLS) if grid[i][j] == (15, 18, 30)] for i in range(ROWS)]
+    accepted_positions = [j for sub in accepted_positions for j in sub]
 
-    def new_piece(self):
-        self.current_piece = self.next_piece
-        self.next_piece = Piece()
-        if self.check_collision():
-            self.game_over = True
+    formatted = convert_shape_format(piece)
+    for pos in formatted:
+        if pos[0] < 0 or pos[0] >= COLS or pos[1] >= ROWS:
+            return False
+        
+        if pos[1] >= 0:
+            if pos not in accepted_positions:
+                return False
+    return True
 
-    def move_piece(self, dx, dy):
-        if not self.check_collision(dx=dx, dy=dy):
-            self.current_piece.x += dx
-            self.current_piece.y += dy
-        elif dy:
-            self.freeze_piece()
-            self.clear_lines()
-            self.new_piece()
 
-    def drop_piece_to_bottom(self):
-        while not self.check_collision(dy=1):
-            self.current_piece.y += 1
-        self.freeze_piece()
-        self.clear_lines()
-        self.new_piece()
+def check_lost(locked_positions):
+    for (x, y) in locked_positions:
+        if y < 0: # O jogo só acaba se as peças ultrapassarem o limite visível (y=0)
+            return True
+    return False
 
-    def rotate_piece(self):
-        rotated_shape = [list(row) for row in zip(*self.current_piece.shape[::-1])]
-        if not self.check_collision(rotated_shape=rotated_shape):
-            self.current_piece.shape = rotated_shape
 
-    def draw_grid(self):
-        for y, row in enumerate(self.grid):
-            for x, cell in enumerate(row):
-                if isinstance(cell, dict):  # Verifica se o grid contém uma peça congelada
-                    pygame.draw.rect(
-                        tela, cell["color"], (x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
-                    )
-                    if cell["border"]:  # Desenha borda se marcado
-                        pygame.draw.rect(
-                            tela,
-                            BLACK,
-                            (x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE),
-                            1,
-                        )
-                else:
-                    pygame.draw.rect(
-                        tela, cell, (x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
-                    )
+def get_shape():
+    idx = random.randrange(len(PIECES))
+    return Piece(x=COLS // 2, y=2, shape=PIECES[idx], color=PIECE_COLORS[idx])
 
-    def draw_piece(self, piece):
-        for y, row in enumerate(piece.shape):
-            for x, cell in enumerate(row):
-                if cell:
-                    pygame.draw.rect(tela, piece.color, ((piece.x + x) * GRID_SIZE, (piece.y + y) * GRID_SIZE, GRID_SIZE, GRID_SIZE))
-                    pygame.draw.rect(tela, BLACK, ((piece.x + x) * GRID_SIZE, (piece.y + y) * GRID_SIZE, GRID_SIZE, GRID_SIZE), 1)  # Adiciona borda preta
 
-    def draw_next_piece(self):
-        font = pygame.font.Font(None, 24)
-        text = font.render("Próxima Peça:", True, WHITE)
-        tela.blit(text, (SCREEN_WIDTH - 120, 10))
-        for y, row in enumerate(self.next_piece.shape):
-            for x, cell in enumerate(row):
-                if cell:
-                    pygame.draw.rect(tela, self.next_piece.color, (SCREEN_WIDTH - 120 + x * GRID_SIZE, 30 + y * GRID_SIZE, GRID_SIZE, GRID_SIZE))
-                    pygame.draw.rect(tela, BLACK, (SCREEN_WIDTH - 120 + x * GRID_SIZE, 30 + y * GRID_SIZE, GRID_SIZE, GRID_SIZE), 1)  # Adiciona borda preta
+def draw_window(screen, grid, score, highscore, level, lines, next_pieces, font, small_font):
+    screen.fill(BG)
 
-    def get_ghost_piece_position(self):
-        ghost_y = self.current_piece.y
-        while not self.check_collision(dy=1, rotated_shape=self.current_piece.shape, ghost_y=ghost_y):
-            ghost_y += 1
-        return ghost_y
+    # Painéis laterais
+    pygame.draw.rect(screen, PANEL, (20, 20, WIDTH - 40, HEIGHT - 40), border_radius=22)
+    pygame.draw.rect(screen, PANEL_2, (TOP_LEFT_X - 14, TOP_LEFT_Y - 14, PLAY_WIDTH + 28, PLAY_HEIGHT + 28), border_radius=20)
+    pygame.draw.rect(screen, CYAN, (TOP_LEFT_X - 14, TOP_LEFT_Y - 14, PLAY_WIDTH + 28, PLAY_HEIGHT + 28), width=3, border_radius=20)
 
-    def draw_ghost_piece(self):
-        ghost_y = self.get_ghost_piece_position()
-        ghost_color = tuple(c // 2 for c in self.current_piece.color)  # Cor mais clara
-        for y, row in enumerate(self.current_piece.shape):
-            for x, cell in enumerate(row):
-                if cell:
-                    pygame.draw.rect(tela, ghost_color, ((self.current_piece.x + x) * GRID_SIZE, (ghost_y + y) * GRID_SIZE, GRID_SIZE, GRID_SIZE), 1) # Desenha apenas a borda
+    # Área de jogo e grade
+    for i in range(ROWS):
+        for j in range(COLS):
+            x = TOP_LEFT_X + j * BLOCK
+            y = TOP_LEFT_Y + i * BLOCK
+            color = grid[i][j]
+            pygame.draw.rect(screen, color, (x, y, BLOCK, BLOCK), border_radius=6)
+            pygame.draw.rect(screen, GRID, (x, y, BLOCK, BLOCK), width=1, border_radius=6)
 
-    def update_level(self):
-        self.level = 1 + self.lines_cleared // 10
-        self.speed = max(100, 500 - (self.level - 1) * 40)
+    # Título
+    title = font.render("TETRIS", True, WHITE)
+    screen.blit(title, (SIDEBAR_X, 35))
+    pygame.draw.line(screen, CYAN, (SIDEBAR_X, 80), (WIDTH - 55, 80), 2)
 
-# Loop principal
+    # Painel de informações
+    labels = [
+        ("Score", score),
+        ("Highscore", highscore),
+        ("Nível", level),
+        ("Linhas", lines),
+    ]
+    y = 110
+    for label, value in labels:
+        text = small_font.render(f"{label}: {value}", True, WHITE)
+        screen.blit(text, (SIDEBAR_X, y))
+        y += 36
+
+    # Próximas peças
+    next_title = small_font.render("Próximas peças", True, WHITE)
+    screen.blit(next_title, (SIDEBAR_X, 280))
+
+    preview_box_y = 320
+    for index, piece in enumerate(next_pieces[:3]):
+        box_y = preview_box_y + index * 135
+        pygame.draw.rect(screen, (30, 35, 52), (SIDEBAR_X, box_y, 220, 110), border_radius=18)
+        pygame.draw.rect(screen, CYAN, (SIDEBAR_X, box_y, 220, 110), width=2, border_radius=18)
+        draw_piece_preview(screen, piece, SIDEBAR_X + 24, box_y + 18, 22)
+
+    # Linha de ajuda
+    help_lines = [
+        "← → mover",
+        "↓ descer",
+        "↑ rotacionar",
+        "ESPAÇO cair",
+    ]
+
+    help_x = SIDEBAR_X + 240
+    help_y = HEIGHT - 180
+
+    for line in help_lines:
+        txt = small_font.render(line, True, (200, 208, 224))
+        screen.blit(txt, (help_x, help_y)) # Usando a nova posição help_x
+        help_y += 30
+
+
+def draw_piece_preview(screen, piece, x_offset, y_offset, size):
+    shape = piece.shape[0]
+    for i, line in enumerate(shape):
+        for j, char in enumerate(line):
+            if char == "0":
+                rx = x_offset + j * size
+                ry = y_offset + i * size
+                draw_block(screen, piece.color, rx, ry, size, preview=True)
+
+
+def draw_block(screen, color, x, y, size=BLOCK, preview=False, alpha=255):
+    rect = pygame.Rect(x, y, size, size)
+    shadow_rect = rect.copy()
+    shadow_rect.move_ip(3, 4)
+    shadow = pygame.Surface((size, size), pygame.SRCALPHA)
+    highlight = pygame.Surface((size, size), pygame.SRCALPHA)
+
+    shadow.fill((0, 0, 0, 90 if preview else 100))
+    highlight.fill((255, 255, 255, 30 if preview else 45))
+    base = pygame.Surface((size, size), pygame.SRCALPHA)
+    base.fill((*color, alpha))
+
+    pygame.draw.rect(screen, (0, 0, 0), shadow_rect, border_radius=7)
+    screen.blit(shadow, rect.topleft)
+    screen.blit(base, rect.topleft)
+    pygame.draw.rect(screen, highlight.get_at((0, 0))[:3], rect, width=1, border_radius=7)
+    pygame.draw.rect(screen, (255, 255, 255), rect, width=1, border_radius=7)
+
+
+def draw_ghost_piece(screen, piece, grid):
+    ghost = Piece(piece.x, piece.y, piece.shape, piece.color, piece.rotation)
+    while True:
+        ghost.y += 1
+        if not valid_space(ghost, grid):
+            ghost.y -= 1
+            break
+    for x, y in convert_shape_format(ghost):
+        if y > -1:
+            px = TOP_LEFT_X + x * BLOCK
+            py = TOP_LEFT_Y + y * BLOCK
+            ghost_surface = pygame.Surface((BLOCK, BLOCK), pygame.SRCALPHA)
+            ghost_surface.fill((255, 255, 255, 55))
+            screen.blit(ghost_surface, (px, py))
+            pygame.draw.rect(screen, (200, 210, 230), (px, py, BLOCK, BLOCK), 1, border_radius=7)
+
+
+def draw_current_piece(screen, piece):
+    for x, y in convert_shape_format(piece):
+        if y > -1:
+            px = TOP_LEFT_X + x * BLOCK
+            py = TOP_LEFT_Y + y * BLOCK
+            draw_block(screen, piece.color, px, py)
+
+
+def clear_rows(locked_positions):
+    cleared_rows = [
+        i for i in range(ROWS)
+        if all((j, i) in locked_positions for j in range(COLS))
+    ]
+
+    if not cleared_rows:
+        return 0
+
+    cleared_rows_set = set(cleared_rows)
+
+    for row in cleared_rows:
+        for j in range(COLS):
+            locked_positions.pop((j, row), None)
+
+    # Move tudo que ficou acima das linhas limpas para baixo.
+    original_items = list(locked_positions.items())
+    locked_positions.clear()
+    for (x, y), color in original_items:
+        shift = sum(1 for row in cleared_rows if y < row)
+        locked_positions[(x, y + shift)] = color
+
+    return len(cleared_rows)
+
+
+def score_for_lines(lines_cleared):
+    if lines_cleared == 1:
+        return 10
+    if lines_cleared == 2:
+        return 25
+    if lines_cleared == 3:
+        return 50
+    if lines_cleared == 4:
+        return 100
+    return 0
+
+
+def level_from_lines(lines):
+    return lines // 10 + 1
+
+
+def fall_speed_for_level(level):
+    # Começa lento e acelera gradativamente.
+    return max(0.08, 0.75 - (level - 1) * 0.06)
+
+
 def main():
-    tetris = Tetris()
-    drop_time = pygame.time.get_ticks()
+    pygame.init()
+    pygame.display.set_caption("Tetris - Python")
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    clock = pygame.time.Clock()
 
-    while not tetris.game_over:
-        tela.fill(BLACK)
+    font = pygame.font.SysFont("arialblack", 42)
+    small_font = pygame.font.SysFont("arial", 24, bold=True)
+    tiny_font = pygame.font.SysFont("arial", 18)
+
+    highscore = load_highscore()
+
+    locked_positions = {}
+    grid = create_grid(locked_positions)
+
+    current_piece = get_shape()
+    next_pieces = [get_shape() for _ in range(3)]
+
+    fall_time = 0.0
+    current_level = 1
+    total_lines = 0
+    score = 0
+    landed_random_bonus = 0
+
+    running = True
+    while running:
+        clock.tick(FPS)
+        fall_time += clock.get_rawtime() / 1000.0
+
+        grid = create_grid(locked_positions)
+        level = level_from_lines(total_lines)
+        speed = fall_speed_for_level(level)
+
+        if level != current_level:
+            current_level = level
+
+        hard_drop = False
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                tetris.game_over = True
+                running = False
+                break
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_LEFT:
-                    tetris.move_piece(-1, 0)
+                    current_piece.x -= 1
+                    if not valid_space(current_piece, grid):
+                        current_piece.x += 1
                 elif event.key == pygame.K_RIGHT:
-                    tetris.move_piece(1, 0)
+                    current_piece.x += 1
+                    if not valid_space(current_piece, grid):
+                        current_piece.x -= 1
                 elif event.key == pygame.K_DOWN:
-                    tetris.move_piece(0, 1)
+                    current_piece.y += 1
+                    if not valid_space(current_piece, grid):
+                        current_piece.y -= 1
                 elif event.key == pygame.K_UP:
-                    tetris.rotate_piece()
+                    current_piece.rotation = (current_piece.rotation + 1) % len(current_piece.shape)
+                    if not valid_space(current_piece, grid):
+                        current_piece.rotation = (current_piece.rotation - 1) % len(current_piece.shape)
                 elif event.key == pygame.K_SPACE:
-                    tetris.drop_piece_to_bottom()
+                    while True:
+                        current_piece.y += 1
+                        if not valid_space(current_piece, grid):
+                            current_piece.y -= 1
+                            break
+                    hard_drop = True
 
-        if pygame.time.get_ticks() - drop_time > tetris.speed:
-            tetris.move_piece(0, 1)
-            drop_time = pygame.time.get_ticks()
+        def lock_piece_and_spawn():
+            nonlocal current_piece, next_pieces, score, total_lines, highscore, grid, landed_random_bonus, fall_time
 
-        tetris.update_level()
-        tetris.draw_grid()
-        tetris.draw_ghost_piece()
-        tetris.draw_piece(tetris.current_piece)
-        tetris.draw_next_piece()
+            for pos in convert_shape_format(current_piece):
+                locked_positions[pos] = current_piece.color
 
-        # Exibe placares
-        font = pygame.font.Font(None, 24)
-        score_text = font.render(f"Score: {tetris.score}", True, WHITE)
-        highscore_text = font.render(f"HighScore: {highscore}", True, WHITE)
-        level_text = font.render(f"Nível: {tetris.level}", True, WHITE)
-        lines_text = font.render(f"Linhas: {tetris.lines_cleared}", True, WHITE)
-        next_level_text = font.render(f"Próx. Nível: {200 - (tetris.score % 200)} pts", True, WHITE)
+            landed_random_bonus = random.randint(0, 6) * max(1, level)
+            lines_cleared = clear_rows(locked_positions)
 
-        tela.blit(score_text, (10, 10))
-        tela.blit(highscore_text, (10, 30))
-        tela.blit(level_text, (10, 50))
-        tela.blit(lines_text, (10, 70))
-        tela.blit(next_level_text, (10, 90))
+            if lines_cleared > 0:
+                score += score_for_lines(lines_cleared)
+                total_lines += lines_cleared
+
+            score += landed_random_bonus
+
+            current_piece = next_pieces.pop(0)
+            next_pieces.append(get_shape())
+            grid = create_grid(locked_positions)
+
+            if score > highscore:
+                highscore = score
+                save_highscore(highscore)
+
+            fall_time = 0
+
+        # Se o jogador apertou ESPAÇO, o bloqueio acontece imediatamente.
+        if hard_drop:
+            lock_piece_and_spawn()
+            # Verifica se a NOVA peça que acabou de nascer colidiu imediatamente
+            if not valid_space(current_piece, grid):
+                running = False
+
+        # Gravidade automática
+        if running and fall_time >= speed:
+            fall_time = 0
+            current_piece.y += 1
+            if not valid_space(current_piece, grid):
+                current_piece.y -= 1
+                lock_piece_and_spawn()
+                if not valid_space(current_piece, grid):
+                    running = False
+
+        draw_window(screen, grid, score, highscore, current_level, total_lines, next_pieces, font, small_font)
+        draw_ghost_piece(screen, current_piece, grid)
+        draw_current_piece(screen, current_piece)
+
+        # Barra inferior e brilho
+        bottom_bar = pygame.Surface((PLAY_WIDTH + 28, 10), pygame.SRCALPHA)
+        bottom_bar.fill((0, 255, 255, 50))
+        screen.blit(bottom_bar, (TOP_LEFT_X - 14, TOP_LEFT_Y + PLAY_HEIGHT + 14))
 
         pygame.display.flip()
-        clock.tick(60)
 
-    # Game Over
-    if tetris.score > highscore:
-        save_highscore(tetris.score)
-    font = pygame.font.Font(None, 48)
-    game_over_text = font.render("GAME OVER", True, WHITE)
-    tela.blit(game_over_text, (SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 - 24))
+    # Tela final
+    screen.fill(BG)
+    pygame.draw.rect(screen, PANEL, (140, 180, 800, 250), border_radius=24)
+    pygame.draw.rect(screen, CYAN, (140, 180, 800, 250), width=3, border_radius=24)
+    over = font.render("GAME OVER", True, WHITE)
+    score_text = small_font.render(f"Score final: {score}", True, WHITE)
+    hs_text = small_font.render(f"Highscore: {highscore}", True, WHITE)
+    exit_text = tiny_font.render("Feche a janela para sair.", True, (210, 218, 230))
+    screen.blit(over, (WIDTH // 2 - over.get_width() // 2, 220))
+    screen.blit(score_text, (WIDTH // 2 - score_text.get_width() // 2, 300))
+    screen.blit(hs_text, (WIDTH // 2 - hs_text.get_width() // 2, 334))
+    screen.blit(exit_text, (WIDTH // 2 - exit_text.get_width() // 2, 380))
     pygame.display.flip()
-    pygame.time.wait(3000)
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+
 
 if __name__ == "__main__":
     main()
-    pygame.quit()
